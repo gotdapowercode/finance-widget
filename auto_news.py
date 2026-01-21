@@ -19,23 +19,42 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 Market Intelligence Dashboard")
+# --- SIDEBAR: Market Selection ---
+st.sidebar.title("⚙️ Settings")
+market = st.sidebar.selectbox("Select Market", ["🇺🇸 United States", "🇦🇺 Australia"])
+
+# Define settings based on selection
+if market == "🇦🇺 Australia":
+    # Yahoo Finance Australia RSS
+    DEFAULT_RSS = "https://au.finance.yahoo.com/news/rssindex"
+    SUFFIX = ".AX"
+    CURRENCY_SYMBOL = "A$"
+    EXAMPLE_TICKER = "BHP" # Example for the text input default
+else:
+    # Yahoo Finance US RSS
+    DEFAULT_RSS = "https://finance.yahoo.com/news/rssindex"
+    SUFFIX = ""
+    CURRENCY_SYMBOL = "$"
+    EXAMPLE_TICKER = "NVDA"
+
+st.title(f"📈 Market Intelligence Dashboard ({market})")
 
 # --- Create Tabs ---
-tab1, tab2 = st.tabs(["🔥 Top Stories (Live)", "🔍 Company Search"])
+tab1, tab2 = st.tabs([f"🔥 Top Stories ({market})", "🔍 Company Search"])
 
 # ==========================
 # TAB 1: GENERAL NEWS (Feed)
 # ==========================
 with tab1:
-    st.header("Global Market News")
+    st.header(f"Top Financial News")
     if st.button("🔄 Refresh Feed"):
         st.rerun()
     
     try:
-        # Yahoo Finance RSS Feed
-        rss_url = "https://finance.yahoo.com/news/rssindex"
-        feed = feedparser.parse(rss_url)
+        feed = feedparser.parse(DEFAULT_RSS)
+        
+        if not feed.entries:
+            st.warning("No news found. The feed might be temporarily down.")
         
         for item in feed.entries[:10]:
             st.markdown(f"""
@@ -47,34 +66,68 @@ with tab1:
             
     except Exception as e:
         st.error(f"Error loading feed: {e}")
+
 # ==========================
-# TAB 2: TICKER SEARCH (RSS FIX)
+# TAB 2: TICKER SEARCH
 # ==========================
 with tab2:
     st.header("Search by Ticker")
-    ticker = st.text_input("Enter Symbol (e.g., NVDA, TSLA, BTC-USD):", value="TSLA").upper()
     
-    if ticker:
-        # 1. Show Current Price (Keep using yfinance for PRICE only, it is reliable for that)
+    # Dynamic placeholder based on region
+    user_input = st.text_input(
+        f"Enter Symbol (e.g., {EXAMPLE_TICKER}):", 
+        value=EXAMPLE_TICKER
+    ).upper().strip()
+    
+    if user_input:
+        # --- Smart Suffix Logic ---
+        # If we are in AU mode, user didn't type .AX, and it looks like a stock (no hyphens like BTC-USD)
+        # We auto-add the suffix
+        if market == "🇦🇺 Australia" and not user_input.endswith(".AX") and "-" not in user_input:
+            ticker = f"{user_input}{SUFFIX}"
+            st.caption(f"ℹ️ Automatically searching for Australian ticker: **{ticker}**")
+        else:
+            ticker = user_input
+
+        # 1. Show Current Price
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
+            
+            # Use 'regularMarketPrice' as a fallback if 'currentPrice' is missing
             price = info.get('currentPrice', info.get('regularMarketPrice', 'N/A'))
             currency = info.get('currency', 'USD')
-            st.metric(label=f"{ticker} Price", value=f"{price} {currency}")
-        except:
-            st.warning("Could not fetch price data.")
+            
+            # Simple color coding: Green if positive change, Red if negative (requires 'regularMarketChangePercent')
+            change = info.get('regularMarketChangePercent', 0) * 100
+            delta_color = "normal"
+            if change > 0: delta_color = "off" # Streamlit metric handles color automatically if we use delta
 
-        # 2. Show News using RSS (More Reliable)
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                st.metric(
+                    label=f"{ticker} Price", 
+                    value=f"{price} {currency}", 
+                    delta=f"{change:.2f}%" if price != 'N/A' else None
+                )
+            with col2:
+                # Show the company name if available
+                long_name = info.get('longName', ticker)
+                st.markdown(f"### **{long_name}**")
+                
+        except Exception:
+            st.warning(f"Could not fetch price data for {ticker}. Check the symbol.")
+
+        # 2. Show News using RSS
         st.subheader(f"Latest News for {ticker}")
         
         try:
-            # We use the specific RSS feed for the ticker
+            # RSS URL is generally the same structure for both markets when searching by symbol
             rss_url = f"https://finance.yahoo.com/rss/headline?s={ticker}"
             feed = feedparser.parse(rss_url)
             
             if not feed.entries:
-                st.info(f"No recent news found for {ticker} (or invalid symbol).")
+                st.info(f"No recent news found for {ticker}.")
             else:
                 for item in feed.entries:
                     title = item.get('title', 'No Title')
